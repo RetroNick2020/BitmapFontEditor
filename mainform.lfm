@@ -645,6 +645,35 @@ object frmMain: TfrmMain
         Caption = 'Font &Metrics...'
         OnClick = mnuFontMetricsClick
       end
+      object mnuSep5: TMenuItem
+        Caption = '-'
+      end
+      object mnuIncreaseWidth: TMenuItem
+        Caption = '&Increase Width of All Characters'
+        OnClick = mnuIncreaseWidthClick
+      end
+      object mnuDecreaseWidth: TMenuItem
+        Caption = '&Decrease Width of All Characters'
+        OnClick = mnuDecreaseWidthClick
+      end
+      object mnuSep6: TMenuItem
+        Caption = '-'
+      end
+      object mnuShiftLeft: TMenuItem
+        Caption = 'Shift All Characters &Left'
+        OnClick = mnuShiftLeftClick
+      end
+      object mnuShiftRight: TMenuItem
+        Caption = 'Shift All Characters &Right'
+        OnClick = mnuShiftRightClick
+      end
+      object mnuSep7: TMenuItem
+        Caption = '-'
+      end
+      object mnuAutoTrim: TMenuItem
+        Caption = '&Auto Trim All Characters'
+        OnClick = mnuAutoTrimClick
+      end
     end
     object mnuHelp: TMenuItem
       Caption = '&Help'
@@ -663,7 +692,6 @@ object frmMain: TfrmMain
   end
   object dlgSave: TSaveDialog
     Title = 'Save Font File'
-    DefaultExt = '.FON'
     Filter = 'Windows Font Files (*.FON)|*.FON|DOS BIOS Fonts (*.FNT)|*.FNT|ROM Fonts (*.ROM)|*.ROM|All Files (*.*)|*.*'
     Options = [ofOverwritePrompt, ofEnableSizing, ofViewDetail]
     Left = 152

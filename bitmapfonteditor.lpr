@@ -13,7 +13,10 @@ uses
   Forms,
   MainForm,
   FONCreator,
-  WinFont;
+  WinFont,
+  DPFont,
+  TEGLFont,
+  AmigaFont;
 
 {$R *.res}
 

@@ -6,9 +6,9 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  Spin, ComCtrls, Menus, LCLType, FONCreator, WinFont;
+  Spin, ComCtrls, Menus, LCLType, FONCreator, WinFont, DPFont, TEGLFont, AmigaFont;
 const
-  ProgramName = 'RetroNick'#39's Bitmap Font Editor';
+  ProgramName = 'RetroNick'#39's Bitmap Font Editor v1.1';
 type
 
   { TfrmMain }
@@ -79,6 +79,14 @@ type
     mnuGenerateFromFont: TMenuItem;
     mnuSep4: TMenuItem;
     mnuFontMetrics: TMenuItem;
+    mnuSep5: TMenuItem;
+    mnuIncreaseWidth: TMenuItem;
+    mnuDecreaseWidth: TMenuItem;
+    mnuSep6: TMenuItem;
+    mnuShiftLeft: TMenuItem;
+    mnuShiftRight: TMenuItem;
+    mnuSep7: TMenuItem;
+    mnuAutoTrim: TMenuItem;
     mnuAbout: TMenuItem;
     pnlCharEdit: TPaintBox;
     pnlPreview: TPaintBox;
@@ -130,6 +138,11 @@ type
     procedure mnuExitClick(Sender: TObject);
     procedure mnuFontMetricsClick(Sender: TObject);
     procedure mnuGenerateFromFontClick(Sender: TObject);
+    procedure mnuIncreaseWidthClick(Sender: TObject);
+    procedure mnuShiftLeftClick(Sender: TObject);
+    procedure mnuShiftRightClick(Sender: TObject);
+    procedure mnuDecreaseWidthClick(Sender: TObject);
+    procedure mnuAutoTrimClick(Sender: TObject);
     procedure mnuNewClick(Sender: TObject);
     procedure mnuUndoClick(Sender: TObject);
     procedure mnuRedoClick(Sender: TObject);
@@ -172,6 +185,10 @@ type
     FDescenderLine: Integer;   // -1 = auto
     FXHeightLine: Integer;     // -1 = auto
     
+    // Remember last dialog filter
+    FLastOpenFilterIndex: Integer;
+    FLastSaveFilterIndex: Integer;
+    
     procedure UpdateCharList;
     procedure UpdatePreview;
     procedure UpdateStatus;
@@ -184,6 +201,14 @@ type
     procedure LoadFONFile(const FN: string);
     procedure LoadFNTFile(const FN: string);
     procedure SaveFNTFile(const FN: string);
+    procedure LoadDPFontFile(const FN: string);
+    procedure SaveDPFontFile(const FN: string);
+    procedure LoadTEGLFontFile(const FN: string);
+    procedure SaveTEGLFontFile(const FN: string);
+    procedure LoadAmigaFontFile(const FN: string);
+    procedure SaveAmigaFontFile(const FN: string);
+    procedure AutoLoadFontFile(const FN: string);
+    function TryLoadTEGLFont(const FN: string): Boolean;
     procedure ResizeCharBitmap(Idx, NewW, NewH: Integer);
     procedure UpdateEditorSize;
     function ConfirmSave: Boolean;
@@ -227,6 +252,10 @@ begin
   FDescenderLine := -1;
   FXHeightLine := -1;
   
+  // Default filter indices
+  FLastOpenFilterIndex := 1;
+  FLastSaveFilterIndex := 1;
+  
   for I := 0 to 255 do
   begin
     FCharBitmaps[I] := nil;
@@ -245,7 +274,7 @@ begin
   cmbZoom.ItemIndex := 2;
   
   edtFontName.Text := 'MyFont';
-  edtCopyright.Text := 'Created with FON Creator';
+  edtCopyright.Text := 'RetroNicks Bitmap Font Editor';
   spnPointSize.Value := 10;
   spnHeight.Value := 12;
   spnAscent.Value := 10;
@@ -1045,18 +1074,94 @@ begin
 end;
 
 procedure TfrmMain.btnLoadFontClick(Sender: TObject);
+begin
+  if not ConfirmSave then Exit;
+  // Filter indices: 1=All, 2=FON, 3=FNT/ROM, 4=Deluxe Paint, 5=TEGL, 6=Amiga, 7=All Files
+  dlgOpen.Filter := 'All Font Files|*.FON;*.FNT;*.ROM;*.M*;*.PCL;*.RTF|' +
+                    'Windows FON Files (*.FON)|*.FON|' +
+                    'DOS BIOS Fonts (*.FNT;*.ROM)|*.FNT;*.ROM|' +
+                    'Deluxe Paint Fonts (*.M*;*.PCL)|*.M*;*.PCL|' +
+                    'TEGL Fonts (*.RTF;*.FNT)|*.RTF;*.FNT|' +
+                    'Amiga Fonts (*.*)|*.*|' +
+                    'All Files (*.*)|*.*';
+  dlgOpen.FilterIndex := FLastOpenFilterIndex;
+  
+  if dlgOpen.Execute then
+  begin
+    FLastOpenFilterIndex := dlgOpen.FilterIndex;
+    case dlgOpen.FilterIndex of
+      1: // All Font Files - try to auto-detect by extension
+        begin
+          AutoLoadFontFile(dlgOpen.FileName);
+        end;
+      2: // Windows FON
+        LoadFONFile(dlgOpen.FileName);
+      3: // DOS BIOS FNT/ROM
+        LoadFNTFile(dlgOpen.FileName);
+      4: // Deluxe Paint
+        LoadDPFontFile(dlgOpen.FileName);
+      5: // TEGL
+        LoadTEGLFontFile(dlgOpen.FileName);
+      6: // Amiga
+        LoadAmigaFontFile(dlgOpen.FileName);
+      7: // All Files - try to auto-detect
+        AutoLoadFontFile(dlgOpen.FileName);
+    end;
+  end;
+end;
+
+procedure TfrmMain.AutoLoadFontFile(const FN: string);
 var
   Ext: string;
 begin
-  if not ConfirmSave then Exit;
-  dlgOpen.Filter := 'All Font Files|*.FON;*.FNT;*.ROM|Windows FON Files (*.FON)|*.FON|DOS BIOS Fonts (*.FNT;*.ROM)|*.FNT;*.ROM|All Files (*.*)|*.*';
-  if dlgOpen.Execute then
-  begin
-    Ext := LowerCase(ExtractFileExt(dlgOpen.FileName));
-    if (Ext = '.fnt') or (Ext = '.rom') then
-      LoadFNTFile(dlgOpen.FileName)
-    else
-      LoadFONFile(dlgOpen.FileName);
+  // Fall back to extension-based detection
+  Ext := LowerCase(ExtractFileExt(FN));
+  
+  if Ext = '.fon' then
+    LoadFONFile(FN)
+  else if (Ext = '.rom') then
+    LoadFNTFile(FN)
+  else if ((Length(Ext) >= 2) and (Ext[2] = 'm')) or (Ext = '.pcl') then
+    LoadDPFontFile(FN)
+  else if Ext = '.rtf' then
+    LoadTEGLFontFile(FN)
+  else if Ext = '.fnt' then
+    // For .fnt, try TEGL first (has signature), then fall back to raw FNT
+    begin
+      if not TryLoadTEGLFont(FN) then
+        LoadFNTFile(FN);
+    end
+  else
+    // Unknown - try FON format
+    LoadFONFile(FN);
+end;
+
+function TfrmMain.TryLoadTEGLFont(const FN: string): Boolean;
+var
+  FS: TFileStream;
+  Sig: Word;
+begin
+  Result := False;
+  if not FileExists(FN) then Exit;
+  
+  try
+    FS := TFileStream.Create(FN, fmOpenRead or fmShareDenyWrite);
+    try
+      if FS.Size < 10 then Exit;
+      FS.ReadBuffer(Sig, 2);
+      // TEGL signature is 'TR' = $54 $52, reads as $5254 little-endian
+      if Sig = $5254 then
+      begin
+        FS.Free;
+        FS := nil;
+        LoadTEGLFontFile(FN);
+        Result := True;
+      end;
+    finally
+      if FS <> nil then FS.Free;
+    end;
+  except
+    Result := False;
   end;
 end;
 
@@ -1187,6 +1292,527 @@ begin
   end;
 end;
 
+{ Deluxe Paint IIe Font Format Support }
+
+procedure TfrmMain.LoadDPFontFile(const FN: string);
+var
+  DPFnt: TDPFont;
+  I, CW, CH: Integer;
+  Bmp: TBitmap;
+  MaxCellHeight: Integer;
+  GlyphTop, GlyphBottom: Integer;
+  TopOffset, GlyphH: Integer;
+begin
+  DPFnt := TDPFont.Create;
+  try
+    if not DPFnt.LoadFromFile(FN) then
+    begin
+      ShowMessage('Failed to load Deluxe Paint font: ' + FN);
+      Exit;
+    end;
+    
+    // Clear existing data
+    for I := 0 to 255 do
+    begin
+      ClearUndoRedo(I);
+      if FCharBitmaps[I] <> nil then begin FCharBitmaps[I].Free; FCharBitmaps[I] := nil; end;
+    end;
+    
+    edtFontName.Text := DPFnt.FontName;
+    
+    // Calculate actual cell height needed to contain all glyphs
+    // Each glyph has TopOffset (from baseline to top of glyph)
+    // and Height. We need to find the max extent above and below baseline.
+    MaxCellHeight := DPFnt.CellHeight;
+    
+    // Scan all glyphs to find actual required cell height
+    for I := 0 to 255 do
+    begin
+      CW := DPFnt.GetCharWidth(I);
+      if CW <= 0 then Continue;
+      
+      TopOffset := DPFnt.GetGlyphTopOffset(I);
+      GlyphH := DPFnt.GetGlyphHeight(I);
+      
+      // TopOffset = distance from baseline to top of glyph (positive = above baseline)
+      // GlyphTop in cell = Baseline - TopOffset
+      // GlyphBottom in cell = GlyphTop + GlyphH
+      GlyphTop := DPFnt.Baseline - TopOffset;
+      GlyphBottom := GlyphTop + GlyphH;
+      
+      if GlyphBottom > MaxCellHeight then
+        MaxCellHeight := GlyphBottom;
+      if GlyphTop < 0 then
+      begin
+        // Glyph extends above cell - adjust baseline would be needed
+        // For now, just note this
+      end;
+    end;
+    
+    CH := MaxCellHeight;
+    spnHeight.Value := CH;
+    spnAscent.Value := DPFnt.Baseline;
+    
+    // Load all glyphs using cell-aware function
+    for I := 0 to 255 do
+    begin
+      CW := DPFnt.GetCharWidth(I);
+      if CW <= 0 then Continue;
+      
+      Bmp := TBitmap.Create;
+      
+      if DPFnt.GetGlyphBitmapInCell(I, Bmp, CH) then
+        FCharBitmaps[I] := Bmp
+      else
+        Bmp.Free;
+    end;
+    
+    // Update character range
+    FCharRangeStart := 32;
+    FCharRangeEnd := 127;
+    for I := 0 to 255 do
+      FCharEnabled[I] := FCharBitmaps[I] <> nil;
+    
+    FCurrentFile := FN;
+    FCurrentChar := 65;
+    UpdateCharList;
+    lstCharsClick(nil);
+    UpdateStatus;
+    SetModified(False);
+    StatusBar.Panels[0].Text := Format('Loaded DP font: %s (baseline=%d, height=%d)', 
+      [ExtractFileName(FN), DPFnt.Baseline, CH]);
+  finally
+    DPFnt.Free;
+  end;
+end;
+
+procedure TfrmMain.SaveDPFontFile(const FN: string);
+var
+  DPFnt: TDPFont;
+  I: Integer;
+begin
+  DPFnt := TDPFont.Create;
+  try
+    DPFnt.FontName := edtFontName.Text;
+    DPFnt.CellHeight := spnHeight.Value;
+    DPFnt.CellWidth := 8;  // Default
+    DPFnt.Baseline := spnAscent.Value;
+    
+    // Find max width
+    for I := 0 to 255 do
+      if FCharBitmaps[I] <> nil then
+        if FCharBitmaps[I].Width > DPFnt.CellWidth then
+          DPFnt.CellWidth := FCharBitmaps[I].Width;
+    
+    // Add all characters
+    for I := 0 to 255 do
+      if FCharBitmaps[I] <> nil then
+        DPFnt.SetGlyphFromBitmap(I, FCharBitmaps[I], FCharBitmaps[I].Width * 4);
+    
+    if DPFnt.SaveToFile(FN) then
+    begin
+      FCurrentFile := FN;
+      SetModified(False);
+      StatusBar.Panels[0].Text := 'Saved DP font: ' + ExtractFileName(FN);
+    end
+    else
+      ShowMessage('Failed to save Deluxe Paint font');
+  finally
+    DPFnt.Free;
+  end;
+end;
+
+{ TEGL Font Format Support }
+
+procedure TfrmMain.LoadTEGLFontFile(const FN: string);
+var
+  TEGLFnt: TTEGLFont;
+  I, CW, CH: Integer;
+  Bmp: TBitmap;
+begin
+  TEGLFnt := TTEGLFont.Create;
+  try
+    if not TEGLFnt.LoadFromFile(FN) then
+    begin
+      ShowMessage('Failed to load TEGL font: ' + FN);
+      Exit;
+    end;
+    
+    // Clear existing data
+    for I := 0 to 255 do
+    begin
+      ClearUndoRedo(I);
+      if FCharBitmaps[I] <> nil then begin FCharBitmaps[I].Free; FCharBitmaps[I] := nil; end;
+    end;
+    
+    edtFontName.Text := TEGLFnt.FontName;
+    spnHeight.Value := TEGLFnt.Height;
+    spnAscent.Value := TEGLFnt.BaseLine;
+    CH := TEGLFnt.Height;
+    
+    // Load glyphs for the defined range
+    for I := TEGLFnt.RangeStart to TEGLFnt.RangeEnd do
+    begin
+      CW := TEGLFnt.GetCharWidth(I);
+      if CW <= 0 then Continue;
+      
+      Bmp := TBitmap.Create;
+      Bmp.Width := CW;
+      Bmp.Height := CH;
+      Bmp.Canvas.Brush.Color := clWhite;
+      Bmp.Canvas.FillRect(0, 0, CW, CH);
+      
+      if TEGLFnt.GetGlyphBitmap(I, Bmp) then
+        FCharBitmaps[I] := Bmp
+      else
+        Bmp.Free;
+    end;
+    
+    // Update character range
+    FCharRangeStart := TEGLFnt.RangeStart;
+    FCharRangeEnd := TEGLFnt.RangeEnd;
+    spnRangeStart.Value := FCharRangeStart;
+    spnRangeEnd.Value := FCharRangeEnd;
+    for I := 0 to 255 do
+      FCharEnabled[I] := (I >= FCharRangeStart) and (I <= FCharRangeEnd);
+    
+    FCurrentFile := FN;
+    FCurrentChar := 65;
+    UpdateCharList;
+    lstCharsClick(nil);
+    UpdateStatus;
+    SetModified(False);
+    StatusBar.Panels[0].Text := Format('Loaded TEGL font: %s (%dx%d)', 
+      [ExtractFileName(FN), TEGLFnt.MaxWidth, TEGLFnt.Height]);
+  finally
+    TEGLFnt.Free;
+  end;
+end;
+
+procedure TfrmMain.SaveTEGLFontFile(const FN: string);
+var
+  TEGLFnt: TTEGLFont;
+  I: Integer;
+begin
+  TEGLFnt := TTEGLFont.Create;
+  try
+    TEGLFnt.FontName := edtFontName.Text;
+    TEGLFnt.SetProperties(spnHeight.Value, spnAscent.Value, FCharRangeStart, FCharRangeEnd);
+    
+    // Add all characters in range
+    for I := FCharRangeStart to FCharRangeEnd do
+      if FCharBitmaps[I] <> nil then
+        TEGLFnt.SetGlyphFromBitmap(I, FCharBitmaps[I]);
+    
+    if TEGLFnt.SaveToFile(FN) then
+    begin
+      FCurrentFile := FN;
+      SetModified(False);
+      StatusBar.Panels[0].Text := 'Saved TEGL font: ' + ExtractFileName(FN);
+    end
+    else
+      ShowMessage('Failed to save TEGL font');
+  finally
+    TEGLFnt.Free;
+  end;
+end;
+
+{ Amiga Font Format Support }
+
+procedure TfrmMain.LoadAmigaFontFile(const FN: string);
+var
+  AmigaFnt: TAmigaFont;
+  I, CW, CH: Integer;
+  Bmp: TBitmap;
+begin
+  AmigaFnt := TAmigaFont.Create;
+  try
+    if not AmigaFnt.LoadFromFile(FN) then
+    begin
+      ShowMessage('Failed to load Amiga font: ' + FN + #13 +
+                  'Note: Amiga fonts are complex Amiga executables. ' +
+                  'Some fonts may not be fully supported.');
+      Exit;
+    end;
+    
+    // Clear existing data
+    for I := 0 to 255 do
+    begin
+      ClearUndoRedo(I);
+      if FCharBitmaps[I] <> nil then begin FCharBitmaps[I].Free; FCharBitmaps[I] := nil; end;
+    end;
+    
+    edtFontName.Text := AmigaFnt.FontName;
+    spnHeight.Value := AmigaFnt.YSize;
+    spnAscent.Value := AmigaFnt.Baseline;
+    CH := AmigaFnt.YSize;
+    
+    // Load glyphs for the defined range
+    for I := AmigaFnt.LoChar to AmigaFnt.HiChar do
+    begin
+      CW := AmigaFnt.GetCharWidth(I);
+      if CW <= 0 then Continue;
+      
+      Bmp := TBitmap.Create;
+      Bmp.Width := CW;
+      Bmp.Height := CH;
+      Bmp.Canvas.Brush.Color := clWhite;
+      Bmp.Canvas.FillRect(0, 0, CW, CH);
+      
+      if AmigaFnt.GetGlyphBitmap(I, Bmp) then
+        FCharBitmaps[I] := Bmp
+      else
+        Bmp.Free;
+    end;
+    
+    // Update character range
+    FCharRangeStart := AmigaFnt.LoChar;
+    FCharRangeEnd := AmigaFnt.HiChar;
+    spnRangeStart.Value := FCharRangeStart;
+    spnRangeEnd.Value := FCharRangeEnd;
+    for I := 0 to 255 do
+      FCharEnabled[I] := (I >= FCharRangeStart) and (I <= FCharRangeEnd);
+    
+    FCurrentFile := FN;
+    FCurrentChar := 65;
+    UpdateCharList;
+    lstCharsClick(nil);
+    UpdateStatus;
+    SetModified(False);
+    StatusBar.Panels[0].Text := Format('Loaded Amiga font: %s (%dx%d)', 
+      [ExtractFileName(FN), AmigaFnt.XSize, AmigaFnt.YSize]);
+  finally
+    AmigaFnt.Free;
+  end;
+end;
+
+procedure TfrmMain.SaveAmigaFontFile(const FN: string);
+var
+  F: File;
+  I, J, X, Y: Integer;
+  NumChars: Integer;
+  Modulo: Integer;
+  MaxBitOffset: Integer;
+  BitOffset: Integer;
+  CharWidths: array of Integer;
+  CharData: array of Byte;
+  BytePos, BitPos: Integer;
+  FontHeight, FontBaseline: Integer;
+  LoChar, HiChar: Byte;
+  
+  // File structure offsets (from code start at 0x20)
+  CharLocOffset: Integer;
+  CharDataOffset: Integer;
+  RelocOffset: Integer;
+  CodeSize: Integer;
+  
+  procedure WriteBEWord(W: Word);
+  var
+    Buf: array[0..1] of Byte;
+  begin
+    Buf[0] := (W shr 8) and $FF;
+    Buf[1] := W and $FF;
+    BlockWrite(F, Buf, 2);
+  end;
+  
+  procedure WriteBELong(L: LongWord);
+  var
+    Buf: array[0..3] of Byte;
+  begin
+    Buf[0] := (L shr 24) and $FF;
+    Buf[1] := (L shr 16) and $FF;
+    Buf[2] := (L shr 8) and $FF;
+    Buf[3] := L and $FF;
+    BlockWrite(F, Buf, 4);
+  end;
+  
+  procedure WriteZeros(Count: Integer);
+  var
+    Buf: array[0..255] of Byte;
+    ToWrite: Integer;
+  begin
+    FillChar(Buf, SizeOf(Buf), 0);
+    while Count > 0 do
+    begin
+      ToWrite := Count;
+      if ToWrite > SizeOf(Buf) then ToWrite := SizeOf(Buf);
+      BlockWrite(F, Buf, ToWrite);
+      Dec(Count, ToWrite);
+    end;
+  end;
+  
+begin
+  // Determine character range
+  LoChar := 32;
+  HiChar := 255;
+  
+  // Find actual range with characters
+  while (LoChar < 255) and (FCharBitmaps[LoChar] = nil) do Inc(LoChar);
+  while (HiChar > LoChar) and (FCharBitmaps[HiChar] = nil) do Dec(HiChar);
+  
+  if FCharBitmaps[LoChar] = nil then
+  begin
+    ShowMessage('No characters to save.');
+    Exit;
+  end;
+  
+  NumChars := HiChar - LoChar + 2;  // +2 for notdef glyph
+  FontHeight := spnHeight.Value;
+  FontBaseline := spnAscent.Value - 1;  // Convert back from 1-based
+  
+  // Calculate character widths and total bit width
+  SetLength(CharWidths, NumChars);
+  MaxBitOffset := 0;
+  for I := 0 to NumChars - 1 do
+  begin
+    if (LoChar + I <= HiChar) and (FCharBitmaps[LoChar + I] <> nil) then
+      CharWidths[I] := FCharBitmaps[LoChar + I].Width
+    else
+      CharWidths[I] := 8;  // Default width for missing chars
+    MaxBitOffset := MaxBitOffset + CharWidths[I];
+  end;
+  
+  // Calculate modulo (bytes per row, rounded up)
+  Modulo := (MaxBitOffset + 7) div 8;
+  // Round up to even number for word alignment
+  if (Modulo mod 2) <> 0 then Inc(Modulo);
+  
+  // Build CharData bitmap (strike font format)
+  SetLength(CharData, Modulo * FontHeight);
+  FillChar(CharData[0], Length(CharData), 0);
+  
+  BitOffset := 0;
+  for I := 0 to NumChars - 1 do
+  begin
+    if (LoChar + I <= HiChar) and (FCharBitmaps[LoChar + I] <> nil) then
+    begin
+      // Copy bitmap data using Amiga bit layout
+      for Y := 0 to FontHeight - 1 do
+      begin
+        for X := 0 to CharWidths[I] - 1 do
+        begin
+          if (Y < FCharBitmaps[LoChar + I].Height) and 
+             (X < FCharBitmaps[LoChar + I].Width) and
+             (FCharBitmaps[LoChar + I].Canvas.Pixels[X, Y] = clBlack) then
+          begin
+            // Set bit using Amiga formula: k = location + col + row * modulo * 8
+            BytePos := (BitOffset + X + Y * Modulo * 8) div 8;
+            BitPos := 7 - ((BitOffset + X + Y * Modulo * 8) mod 8);
+            if BytePos < Length(CharData) then
+              CharData[BytePos] := CharData[BytePos] or (1 shl BitPos);
+          end;
+        end;
+      end;
+    end;
+    BitOffset := BitOffset + CharWidths[I];
+  end;
+  
+  // Calculate file layout
+  // Code starts at 0x20
+  // TextFont at 0x6E (offset 0x4E from code start)
+  // CharLoc follows TextFont (32 bytes) at 0x8E
+  CharLocOffset := $6E;  // offset from code start for pointer storage
+  CharDataOffset := CharLocOffset + NumChars * 4;
+  // Align CharData to 4 bytes
+  if (CharDataOffset mod 4) <> 0 then
+    CharDataOffset := CharDataOffset + (4 - (CharDataOffset mod 4));
+  
+  CodeSize := $4E + 32 + NumChars * 4 + Length(CharData);
+  // Align to longword
+  if (CodeSize mod 4) <> 0 then
+    CodeSize := CodeSize + (4 - (CodeSize mod 4));
+  RelocOffset := CodeSize;
+  
+  AssignFile(F, FN);
+  {$I-}
+  Rewrite(F, 1);
+  {$I+}
+  if IOResult <> 0 then
+  begin
+    ShowMessage('Cannot create file: ' + FN);
+    Exit;
+  end;
+  
+  try
+    // HUNK_HEADER
+    WriteBELong($000003F3);  // HUNK_HEADER
+    WriteBELong($00000000);  // No resident libraries
+    WriteBELong($00000001);  // 1 hunk
+    WriteBELong($00000000);  // First hunk
+    WriteBELong($00000000);  // Last hunk
+    WriteBELong((CodeSize + 3) div 4);  // Hunk size in longwords
+    
+    // HUNK_CODE
+    WriteBELong($000003E9);  // HUNK_CODE
+    WriteBELong((CodeSize + 3) div 4);  // Code size in longwords
+    
+    // Code stub (0x20-0x23)
+    WriteBELong($70644E75);  // moveq #$64,d0 / rts
+    
+    // Padding to 0x6E (from 0x24)
+    WriteZeros($6E - $24);
+    
+    // TextFont structure at 0x6E (32 bytes)
+    WriteBEWord(FontHeight);           // +0: YSize
+    WriteBEWord($0042);                // +2: Style=0, Flags=$42 (FPF_ROMFONT | FPF_DESIGNED)
+    WriteBEWord(CharWidths[0]);        // +4: XSize (nominal width)
+    WriteBEWord(FontBaseline);         // +6: Baseline
+    WriteBEWord(1);                    // +8: BoldSmear
+    WriteBEWord(0);                    // +10: Accessors
+    WriteBEWord((LoChar shl 8) or HiChar);  // +12: LoChar, HiChar
+    WriteBELong(CharDataOffset);       // +14: CharData pointer (offset from code start)
+    WriteBEWord(Modulo);               // +18: Modulo
+    WriteBELong(CharLocOffset);        // +20: CharLoc pointer (offset from code start)
+    WriteBELong(0);                    // +24: CharSpace (none)
+    WriteBELong(0);                    // +28: CharKern (none)
+    
+    // CharLoc table at 0x8E
+    BitOffset := 0;
+    for I := 0 to NumChars - 1 do
+    begin
+      WriteBEWord(BitOffset);          // Bit offset
+      WriteBEWord(CharWidths[I]);      // Bit width
+      BitOffset := BitOffset + CharWidths[I];
+    end;
+    
+    // Padding to align CharData if needed
+    J := $20 + CharLocOffset + NumChars * 4;
+    while J < $20 + CharDataOffset do
+    begin
+      WriteBEWord(0);
+      Inc(J, 2);
+    end;
+    
+    // CharData bitmap
+    BlockWrite(F, CharData[0], Length(CharData));
+    
+    // Padding to align to longword
+    J := Length(CharData);
+    while (J mod 4) <> 0 do
+    begin
+      WriteBEWord(0);
+      Inc(J, 2);
+    end;
+    
+    // HUNK_RELOC32
+    WriteBELong($000003EC);  // HUNK_RELOC32
+    WriteBELong(2);          // 2 relocations
+    WriteBELong(0);          // Hunk 0
+    WriteBELong($4E + 14);   // Offset to CharData pointer (font+14)
+    WriteBELong($4E + 20);   // Offset to CharLoc pointer (font+20)
+    WriteBELong(0);          // End of relocations
+    
+    // HUNK_END
+    WriteBELong($000003F2);
+    
+    FCurrentFile := FN;
+    SetModified(False);
+    StatusBar.Panels[0].Text := 'Saved Amiga font: ' + ExtractFileName(FN);
+  finally
+    CloseFile(F);
+  end;
+end;
+
 procedure TfrmMain.LoadFONFile(const FN: string);
 var
   FONFont: TWinFont;
@@ -1242,54 +1868,140 @@ var
   I: Integer;
   PF: TFontPitchFamily;
   CS: TFontCharSet;
-  Ext: string;
+  SaveFileName: string;
 begin
-  dlgSave.Filter := 'Windows FON Files (*.FON)|*.FON|DOS BIOS Fonts (*.FNT)|*.FNT|ROM Fonts (*.ROM)|*.ROM|All Files (*.*)|*.*';
-  dlgSave.FileName := edtFontName.Text + '.FON';
+  // Filter indices: 1=FON, 2=FNT, 3=ROM, 4=Deluxe Paint, 5=TEGL, 6=Amiga, 7=All
+  dlgSave.Filter := 'Windows FON Files (*.FON)|*.FON|' +
+                    'DOS BIOS Fonts (*.FNT)|*.FNT|' +
+                    'ROM Fonts (*.ROM)|*.ROM|' +
+                    'Deluxe Paint Fonts (*.M*)|*.M*|' +
+                    'TEGL Fonts (*.RTF)|*.RTF|' +
+                    'Amiga Fonts (*.FNT)|*.FNT|' +
+                    'All Files (*.*)|*.*';
+  dlgSave.FileName := edtFontName.Text;
+  dlgSave.FilterIndex := FLastSaveFilterIndex;
+  
   if dlgSave.Execute then
   begin
-    Ext := LowerCase(ExtractFileExt(dlgSave.FileName));
+    FLastSaveFilterIndex := dlgSave.FilterIndex;
+    SaveFileName := dlgSave.FileName;
     
-    if (Ext = '.fnt') or (Ext = '.rom') then
+    // Add default extension based on filter if none provided
+    if ExtractFileExt(SaveFileName) = '' then
     begin
-      // Save as FNT/ROM format
-      try
-        SaveFNTFile(dlgSave.FileName);
-      except
-        on E: Exception do ShowMessage('Error saving FNT: ' + E.Message);
+      case dlgSave.FilterIndex of
+        1: SaveFileName := SaveFileName + '.FON';
+        2: SaveFileName := SaveFileName + '.FNT';
+        3: SaveFileName := SaveFileName + '.ROM';
+        4: SaveFileName := SaveFileName + '.M8';
+        5: SaveFileName := SaveFileName + '.RTF';
+        6: SaveFileName := SaveFileName + '.FNT';
       end;
-    end
+    end;
+    
+    // Save based on selected filter, not extension
+    case dlgSave.FilterIndex of
+      1: // Windows FON
+        begin
+          try
+            FCreator.ClearAll;
+            FCreator.FontName := edtFontName.Text;
+            FCreator.Copyright := edtCopyright.Text;
+            FCreator.PointSize := spnPointSize.Value;
+            FCreator.Height := spnHeight.Value;
+            FCreator.Ascent := spnAscent.Value;
+            if cboBold.Checked then FCreator.Weight := fwBold else FCreator.Weight := fwNormal;
+            FCreator.Italic := cboItalic.Checked;
+            FCreator.Underline := cboUnderline.Checked;
+            case cmbCharSet.ItemIndex of
+              0: CS := csANSI; 1: CS := csDefault; 2: CS := csSymbol; 3: CS := csOEM;
+            else CS := csANSI; end;
+            FCreator.CharSet := CS;
+            case cmbPitchFamily.ItemIndex of
+              0: PF := pfDefault; 1: PF := pfFixed; 2: PF := pfVariable;
+              3: PF := pfRoman; 4: PF := pfSwiss; 5: PF := pfModern;
+              6: PF := pfScript; 7: PF := pfDecorative;
+            else PF := pfDefault; end;
+            FCreator.PitchFamily := PF;
+            for I := 0 to 255 do if FCharBitmaps[I] <> nil then FCreator.SetCharacter(I, FCharBitmaps[I]);
+            FCreator.SaveToFile(SaveFileName);
+            FCurrentFile := SaveFileName;
+            SetModified(False);
+            UpdateStatus;
+            StatusBar.Panels[0].Text := 'Saved FON: ' + ExtractFileName(SaveFileName);
+          except
+            on E: Exception do ShowMessage('Error saving FON: ' + E.Message);
+          end;
+        end;
+        
+      2, 3: // DOS FNT or ROM (same format)
+        begin
+          try
+            SaveFNTFile(SaveFileName);
+          except
+            on E: Exception do ShowMessage('Error saving FNT: ' + E.Message);
+          end;
+        end;
+        
+      4: // Deluxe Paint
+        begin
+          try
+            SaveDPFontFile(SaveFileName);
+          except
+            on E: Exception do ShowMessage('Error saving Deluxe Paint font: ' + E.Message);
+          end;
+        end;
+        
+      5: // TEGL
+        begin
+          try
+            SaveTEGLFontFile(SaveFileName);
+          except
+            on E: Exception do ShowMessage('Error saving TEGL font: ' + E.Message);
+          end;
+        end;
+        
+      6: // Amiga
+        begin
+          try
+            SaveAmigaFontFile(SaveFileName);
+          except
+            on E: Exception do ShowMessage('Error saving Amiga font: ' + E.Message);
+          end;
+        end;
+        
     else
-    begin
-      // Save as FON format
-      try
-        FCreator.ClearAll;
-        FCreator.FontName := edtFontName.Text;
-        FCreator.Copyright := edtCopyright.Text;
-        FCreator.PointSize := spnPointSize.Value;
-        FCreator.Height := spnHeight.Value;
-        FCreator.Ascent := spnAscent.Value;
-        if cboBold.Checked then FCreator.Weight := fwBold else FCreator.Weight := fwNormal;
-        FCreator.Italic := cboItalic.Checked;
-        FCreator.Underline := cboUnderline.Checked;
-        case cmbCharSet.ItemIndex of
-          0: CS := csANSI; 1: CS := csDefault; 2: CS := csSymbol; 3: CS := csOEM;
-        else CS := csANSI; end;
-        FCreator.CharSet := CS;
-        case cmbPitchFamily.ItemIndex of
-          0: PF := pfDefault; 1: PF := pfFixed; 2: PF := pfVariable;
-          3: PF := pfRoman; 4: PF := pfSwiss; 5: PF := pfModern;
-          6: PF := pfScript; 7: PF := pfDecorative;
-        else PF := pfDefault; end;
-        FCreator.PitchFamily := PF;
-        for I := 0 to 255 do if FCharBitmaps[I] <> nil then FCreator.SetCharacter(I, FCharBitmaps[I]);
-        FCreator.SaveToFile(dlgSave.FileName);
-        FCurrentFile := dlgSave.FileName;
-        SetModified(False);
-        UpdateStatus;
-        StatusBar.Panels[0].Text := 'Saved: ' + ExtractFileName(dlgSave.FileName);
-      except
-        on E: Exception do ShowMessage('Error: ' + E.Message);
+      // All Files - default to FON
+      begin
+        try
+          FCreator.ClearAll;
+          FCreator.FontName := edtFontName.Text;
+          FCreator.Copyright := edtCopyright.Text;
+          FCreator.PointSize := spnPointSize.Value;
+          FCreator.Height := spnHeight.Value;
+          FCreator.Ascent := spnAscent.Value;
+          if cboBold.Checked then FCreator.Weight := fwBold else FCreator.Weight := fwNormal;
+          FCreator.Italic := cboItalic.Checked;
+          FCreator.Underline := cboUnderline.Checked;
+          case cmbCharSet.ItemIndex of
+            0: CS := csANSI; 1: CS := csDefault; 2: CS := csSymbol; 3: CS := csOEM;
+          else CS := csANSI; end;
+          FCreator.CharSet := CS;
+          case cmbPitchFamily.ItemIndex of
+            0: PF := pfDefault; 1: PF := pfFixed; 2: PF := pfVariable;
+            3: PF := pfRoman; 4: PF := pfSwiss; 5: PF := pfModern;
+            6: PF := pfScript; 7: PF := pfDecorative;
+          else PF := pfDefault; end;
+          FCreator.PitchFamily := PF;
+          for I := 0 to 255 do if FCharBitmaps[I] <> nil then FCreator.SetCharacter(I, FCharBitmaps[I]);
+          FCreator.SaveToFile(SaveFileName);
+          FCurrentFile := SaveFileName;
+          SetModified(False);
+          UpdateStatus;
+          StatusBar.Panels[0].Text := 'Saved: ' + ExtractFileName(SaveFileName);
+        except
+          on E: Exception do ShowMessage('Error: ' + E.Message);
+        end;
       end;
     end;
   end;
@@ -1302,7 +2014,7 @@ begin
   if not ConfirmSave then Exit;
   for I := 0 to 255 do begin ClearUndoRedo(I); if FCharBitmaps[I] <> nil then begin FCharBitmaps[I].Free; FCharBitmaps[I] := nil; end; end;
   edtFontName.Text := 'MyFont';
-  edtCopyright.Text := 'Created with FON Creator';
+  edtCopyright.Text := 'RetroNicks Bitmap Font Editor';
   spnPointSize.Value := 10;
   spnHeight.Value := 12;
   spnAscent.Value := 10;
@@ -1384,6 +2096,330 @@ begin
   if Cnt = 0 then begin ShowMessage('No characters defined.'); Exit; end;
   ShowMessage(Format('Font: %s'#13'Points: %d'#13'Height: %d'#13'Ascent: %d'#13#13'Chars: %d'#13'Min Width: %d'#13'Max Width: %d'#13'Avg Width: %.1f',
     [edtFontName.Text, spnPointSize.Value, spnHeight.Value, spnAscent.Value, Cnt, MinW, MaxW, TotW / Cnt]));
+end;
+
+procedure TfrmMain.mnuIncreaseWidthClick(Sender: TObject);
+var
+  I, OldW, NewW, H: Integer;
+  NewBmp: TBitmap;
+  Cnt: Integer;
+begin
+  Cnt := 0;
+  H := spnHeight.Value;
+  
+  for I := 0 to 255 do
+  begin
+    if FCharBitmaps[I] <> nil then
+    begin
+      OldW := FCharBitmaps[I].Width;
+      NewW := OldW + 1;
+      
+      // Create new bitmap with increased width
+      NewBmp := TBitmap.Create;
+      NewBmp.Width := NewW;
+      NewBmp.Height := H;
+      NewBmp.Canvas.Brush.Color := clWhite;
+      NewBmp.Canvas.FillRect(0, 0, NewW, H);
+      
+      // Copy old bitmap to new (left-aligned)
+      NewBmp.Canvas.Draw(0, 0, FCharBitmaps[I]);
+      
+      // Replace old with new
+      FCharBitmaps[I].Free;
+      FCharBitmaps[I] := NewBmp;
+      Inc(Cnt);
+    end;
+  end;
+  
+  if Cnt > 0 then
+  begin
+    SetModified(True);
+    lstCharsClick(nil);
+    UpdatePreview;
+    StatusBar.Panels[0].Text := Format('Increased width of %d characters', [Cnt]);
+  end
+  else
+    ShowMessage('No characters to modify.');
+end;
+
+procedure TfrmMain.mnuShiftLeftClick(Sender: TObject);
+var
+  I, X, Y, W, H: Integer;
+  CanShift: Boolean;
+  NewBmp: TBitmap;
+  Cnt: Integer;
+begin
+  Cnt := 0;
+  H := spnHeight.Value;
+  
+  for I := 0 to 255 do
+  begin
+    if FCharBitmaps[I] <> nil then
+    begin
+      W := FCharBitmaps[I].Width;
+      if W < 1 then Continue;
+      
+      // Check if first column is empty (all white pixels)
+      CanShift := True;
+      for Y := 0 to H - 1 do
+      begin
+        if FCharBitmaps[I].Canvas.Pixels[0, Y] = clBlack then
+        begin
+          CanShift := False;
+          Break;
+        end;
+      end;
+      
+      if CanShift then
+      begin
+        // Create new bitmap and shift content left by 1 pixel
+        NewBmp := TBitmap.Create;
+        NewBmp.Width := W;
+        NewBmp.Height := H;
+        NewBmp.Canvas.Brush.Color := clWhite;
+        NewBmp.Canvas.FillRect(0, 0, W, H);
+        
+        // Copy pixels shifted left by 1
+        for Y := 0 to H - 1 do
+          for X := 1 to W - 1 do
+            if FCharBitmaps[I].Canvas.Pixels[X, Y] = clBlack then
+              NewBmp.Canvas.Pixels[X - 1, Y] := clBlack;
+        
+        // Replace old with new
+        FCharBitmaps[I].Free;
+        FCharBitmaps[I] := NewBmp;
+        Inc(Cnt);
+      end;
+    end;
+  end;
+  
+  if Cnt > 0 then
+  begin
+    SetModified(True);
+    lstCharsClick(nil);
+    UpdatePreview;
+    StatusBar.Panels[0].Text := Format('Shifted %d characters left', [Cnt]);
+  end
+  else
+    ShowMessage('No characters could be shifted (first column not empty).');
+end;
+
+procedure TfrmMain.mnuDecreaseWidthClick(Sender: TObject);
+var
+  I, X, Y, W, H: Integer;
+  CanDecrease: Boolean;
+  NewBmp: TBitmap;
+  Cnt: Integer;
+begin
+  Cnt := 0;
+  H := spnHeight.Value;
+  
+  for I := 0 to 255 do
+  begin
+    if FCharBitmaps[I] <> nil then
+    begin
+      W := FCharBitmaps[I].Width;
+      if W < 2 then Continue;  // Can't decrease width below 1
+      
+      // Check if last column is empty (all white pixels)
+      CanDecrease := True;
+      for Y := 0 to H - 1 do
+      begin
+        if FCharBitmaps[I].Canvas.Pixels[W - 1, Y] = clBlack then
+        begin
+          CanDecrease := False;
+          Break;
+        end;
+      end;
+      
+      if CanDecrease then
+      begin
+        // Create new bitmap with decreased width
+        NewBmp := TBitmap.Create;
+        NewBmp.Width := W - 1;
+        NewBmp.Height := H;
+        NewBmp.Canvas.Brush.Color := clWhite;
+        NewBmp.Canvas.FillRect(0, 0, W - 1, H);
+        
+        // Copy pixels (excluding last column)
+        for Y := 0 to H - 1 do
+          for X := 0 to W - 2 do
+            if FCharBitmaps[I].Canvas.Pixels[X, Y] = clBlack then
+              NewBmp.Canvas.Pixels[X, Y] := clBlack;
+        
+        // Replace old with new
+        FCharBitmaps[I].Free;
+        FCharBitmaps[I] := NewBmp;
+        Inc(Cnt);
+      end;
+    end;
+  end;
+  
+  if Cnt > 0 then
+  begin
+    SetModified(True);
+    lstCharsClick(nil);
+    UpdatePreview;
+    StatusBar.Panels[0].Text := Format('Decreased width of %d characters', [Cnt]);
+  end
+  else
+    ShowMessage('No characters could be decreased (last column not empty).');
+end;
+
+procedure TfrmMain.mnuShiftRightClick(Sender: TObject);
+var
+  I, X, Y, W, H: Integer;
+  CanShift: Boolean;
+  NewBmp: TBitmap;
+  Cnt: Integer;
+begin
+  Cnt := 0;
+  H := spnHeight.Value;
+  
+  for I := 0 to 255 do
+  begin
+    if FCharBitmaps[I] <> nil then
+    begin
+      W := FCharBitmaps[I].Width;
+      if W < 1 then Continue;
+      
+      // Check if last column is empty (all white pixels)
+      CanShift := True;
+      for Y := 0 to H - 1 do
+      begin
+        if FCharBitmaps[I].Canvas.Pixels[W - 1, Y] = clBlack then
+        begin
+          CanShift := False;
+          Break;
+        end;
+      end;
+      
+      if CanShift then
+      begin
+        // Create new bitmap and shift content right by 1 pixel
+        NewBmp := TBitmap.Create;
+        NewBmp.Width := W;
+        NewBmp.Height := H;
+        NewBmp.Canvas.Brush.Color := clWhite;
+        NewBmp.Canvas.FillRect(0, 0, W, H);
+        
+        // Copy pixels shifted right by 1
+        for Y := 0 to H - 1 do
+          for X := 0 to W - 2 do
+            if FCharBitmaps[I].Canvas.Pixels[X, Y] = clBlack then
+              NewBmp.Canvas.Pixels[X + 1, Y] := clBlack;
+        
+        // Replace old with new
+        FCharBitmaps[I].Free;
+        FCharBitmaps[I] := NewBmp;
+        Inc(Cnt);
+      end;
+    end;
+  end;
+  
+  if Cnt > 0 then
+  begin
+    SetModified(True);
+    lstCharsClick(nil);
+    UpdatePreview;
+    StatusBar.Panels[0].Text := Format('Shifted %d characters right', [Cnt]);
+  end
+  else
+    ShowMessage('No characters could be shifted (last column not empty).');
+end;
+
+procedure TfrmMain.mnuAutoTrimClick(Sender: TObject);
+var
+  I, X, Y, W, H: Integer;
+  LeftTrim, RightTrim: Integer;
+  NewW: Integer;
+  NewBmp: TBitmap;
+  Cnt: Integer;
+  ColEmpty: Boolean;
+begin
+  Cnt := 0;
+  H := spnHeight.Value;
+  
+  for I := 0 to 255 do
+  begin
+    if FCharBitmaps[I] <> nil then
+    begin
+      W := FCharBitmaps[I].Width;
+      if W < 2 then Continue;  // Need at least 2 pixels to trim
+      
+      // Find how many empty columns on the left
+      LeftTrim := 0;
+      for X := 0 to W - 2 do  // Leave at least 1 column
+      begin
+        ColEmpty := True;
+        for Y := 0 to H - 1 do
+        begin
+          if FCharBitmaps[I].Canvas.Pixels[X, Y] = clBlack then
+          begin
+            ColEmpty := False;
+            Break;
+          end;
+        end;
+        if ColEmpty then
+          Inc(LeftTrim)
+        else
+          Break;
+      end;
+      
+      // Find how many empty columns on the right
+      RightTrim := 0;
+      for X := W - 1 downto LeftTrim + 1 do  // Leave at least 1 column
+      begin
+        ColEmpty := True;
+        for Y := 0 to H - 1 do
+        begin
+          if FCharBitmaps[I].Canvas.Pixels[X, Y] = clBlack then
+          begin
+            ColEmpty := False;
+            Break;
+          end;
+        end;
+        if ColEmpty then
+          Inc(RightTrim)
+        else
+          Break;
+      end;
+      
+      // Apply trimming if any
+      if (LeftTrim > 0) or (RightTrim > 0) then
+      begin
+        NewW := W - LeftTrim - RightTrim;
+        if NewW < 1 then NewW := 1;  // Ensure minimum width of 1
+        
+        NewBmp := TBitmap.Create;
+        NewBmp.Width := NewW;
+        NewBmp.Height := H;
+        NewBmp.Canvas.Brush.Color := clWhite;
+        NewBmp.Canvas.FillRect(0, 0, NewW, H);
+        
+        // Copy the non-empty portion
+        for Y := 0 to H - 1 do
+          for X := 0 to NewW - 1 do
+            if FCharBitmaps[I].Canvas.Pixels[X + LeftTrim, Y] = clBlack then
+              NewBmp.Canvas.Pixels[X, Y] := clBlack;
+        
+        // Replace old with new
+        FCharBitmaps[I].Free;
+        FCharBitmaps[I] := NewBmp;
+        Inc(Cnt);
+      end;
+    end;
+  end;
+  
+  if Cnt > 0 then
+  begin
+    SetModified(True);
+    lstCharsClick(nil);
+    UpdatePreview;
+    StatusBar.Panels[0].Text := Format('Auto-trimmed %d characters', [Cnt]);
+  end
+  else
+    ShowMessage('No characters needed trimming.');
 end;
 
 procedure TfrmMain.mnuAboutClick(Sender: TObject);
