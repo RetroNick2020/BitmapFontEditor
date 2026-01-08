@@ -6,9 +6,10 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls,
-  Spin, ComCtrls, Menus, LCLType, FONCreator, WinFont, DPFont, TEGLFont, AmigaFont;
+  Spin, ComCtrls, Menus, LCLType, FONCreator, WinFont, DPFont, TEGLFont, AmigaFont, APLFont,
+  FontScript, ScriptManager;
 const
-  ProgramName = 'RetroNick'#39's Bitmap Font Editor v1.1';
+  ProgramName = 'RetroNick'#39's Bitmap Font Editor v1.2';
 type
 
   { TfrmMain }
@@ -62,6 +63,7 @@ type
     lblLineValues: TLabel;
     lstChars: TListBox;
     MainMenu: TMainMenu;
+    mnuScript: TMenuItem;
     mnuFile: TMenuItem;
     mnuEdit: TMenuItem;
     mnuTools: TMenuItem;
@@ -93,6 +95,7 @@ type
     dlgSave: TSaveDialog;
     dlgOpen: TOpenDialog;
     sbCharEdit: TScrollBox;
+    mnuSep8: TMenuItem;
     spnAscent: TSpinEdit;
     spnHeight: TSpinEdit;
     spnPointSize: TSpinEdit;
@@ -124,6 +127,7 @@ type
     procedure cboShowBaselineChange(Sender: TObject);
     procedure cboShowGridChange(Sender: TObject);
     procedure chkLineMarkerChange(Sender: TObject);
+    procedure mnuScriptClick(Sender: TObject);
     procedure spnLineMarkerChange(Sender: TObject);
     procedure cmbZoomChange(Sender: TObject);
     procedure edtPreviewTextChange(Sender: TObject);
@@ -146,6 +150,7 @@ type
     procedure mnuNewClick(Sender: TObject);
     procedure mnuUndoClick(Sender: TObject);
     procedure mnuRedoClick(Sender: TObject);
+    procedure mnuScriptManagerClick(Sender: TObject);
     procedure pnlCharEditMouseDown(Sender: TObject; Button: TMouseButton;
       Shift: TShiftState; X, Y: Integer);
     procedure pnlCharEditMouseMove(Sender: TObject; Shift: TShiftState; X, Y: Integer);
@@ -188,7 +193,11 @@ type
     // Remember last dialog filter
     FLastOpenFilterIndex: Integer;
     FLastSaveFilterIndex: Integer;
-    
+
+    // Scripting support
+    FFontAPI: TFontScriptAPI;
+    FScriptManagerForm: TfrmScriptManager;
+
     procedure UpdateCharList;
     procedure UpdatePreview;
     procedure UpdateStatus;
@@ -207,6 +216,9 @@ type
     procedure SaveTEGLFontFile(const FN: string);
     procedure LoadAmigaFontFile(const FN: string);
     procedure SaveAmigaFontFile(const FN: string);
+    procedure LoadAPLFontFile(const FN: string);
+    procedure SaveAPLFontFile(const FN: string);
+    function TryLoadAPLFont(const FN: string): Boolean;
     procedure AutoLoadFontFile(const FN: string);
     function TryLoadTEGLFont(const FN: string): Boolean;
     procedure ResizeCharBitmap(Idx, NewW, NewH: Integer);
@@ -216,6 +228,28 @@ type
     procedure ClearUndoRedo(Idx: Integer);
     procedure ApplyCharRange;
     procedure ScanFontLines(out AscenderY, DescenderY, XHeightY: Integer);
+
+
+
+  // Script API callbacks
+  function ScriptGetPixel(CharCode, X, Y: Integer): Boolean;
+  procedure ScriptSetPixel(CharCode, X, Y: Integer; Value: Boolean);
+  function ScriptGetCharWidth(CharCode: Integer): Integer;
+  procedure ScriptSetCharWidth(CharCode, AWidth: Integer);
+  function ScriptGetCharBitmap(CharCode: Integer): TBitmap;
+  procedure ScriptSetCharBitmap(CharCode: Integer; Bmp: TBitmap);
+  procedure ScriptRefresh;
+  procedure ScriptSaveUndo(CharCode: Integer);
+  procedure ScriptSelectChar(CharCode: Integer);
+  procedure ScriptMarkModified;
+  function ScriptGetCurrentChar: Integer;
+  function ScriptGetFontHeight: Integer;
+  function ScriptGetFontName: string;
+  procedure ScriptSetFontName(const AName: string);
+  function ScriptGetRangeStart: Integer;
+  function ScriptGetRangeEnd: Integer;
+  procedure ScriptSetRange(StartChar, EndChar: Integer);
+  procedure ScriptPrint(const Msg: string);
   end;
 
 var
@@ -294,6 +328,30 @@ begin
   UpdateLineMarkerDisplay;
   pnlCharEdit.Repaint;
   FInitializing := False;
+
+
+  // Initialize scripting API
+   FFontAPI := TFontScriptAPI.Create;
+   FFontAPI.OnGetPixel := @ScriptGetPixel;
+   FFontAPI.OnSetPixel := @ScriptSetPixel;
+   FFontAPI.OnGetCharWidth := @ScriptGetCharWidth;
+   FFontAPI.OnSetCharWidth := @ScriptSetCharWidth;
+   FFontAPI.OnGetCharBitmap := @ScriptGetCharBitmap;
+   FFontAPI.OnSetCharBitmap := @ScriptSetCharBitmap;
+   FFontAPI.OnRefresh := @ScriptRefresh;
+   FFontAPI.OnSaveUndo := @ScriptSaveUndo;
+   FFontAPI.OnSelectChar := @ScriptSelectChar;
+   FFontAPI.OnMarkModified := @ScriptMarkModified;
+   FFontAPI.OnGetCurrentChar := @ScriptGetCurrentChar;
+   FFontAPI.OnGetFontHeight := @ScriptGetFontHeight;
+   FFontAPI.OnGetFontName := @ScriptGetFontName;
+   FFontAPI.OnSetFontName := @ScriptSetFontName;
+   FFontAPI.OnGetRangeStart := @ScriptGetRangeStart;
+   FFontAPI.OnGetRangeEnd := @ScriptGetRangeEnd;
+   FFontAPI.OnSetRange := @ScriptSetRange;
+   FFontAPI.OnPrint := @ScriptPrint;
+
+   FScriptManagerForm := nil;
 end;
 
 procedure TfrmMain.FormDestroy(Sender: TObject);
@@ -310,6 +368,8 @@ begin
     FRedoStack[I].Free;
   end;
   if FClipboardBitmap <> nil then FClipboardBitmap.Free;
+  FFontAPI.Free;
+  // FScriptManagerForm is freed automatically as owned form
 end;
 
 procedure TfrmMain.FormClose(Sender: TObject; var CloseAction: TCloseAction);
@@ -1076,12 +1136,13 @@ end;
 procedure TfrmMain.btnLoadFontClick(Sender: TObject);
 begin
   if not ConfirmSave then Exit;
-  // Filter indices: 1=All, 2=FON, 3=FNT/ROM, 4=Deluxe Paint, 5=TEGL, 6=Amiga, 7=All Files
+  // Filter indices: 1=All, 2=FON, 3=FNT/ROM, 4=Deluxe Paint, 5=TEGL, 6=APL, 7=Amiga, 8=All Files
   dlgOpen.Filter := 'All Font Files|*.FON;*.FNT;*.ROM;*.M*;*.PCL;*.RTF|' +
                     'Windows FON Files (*.FON)|*.FON|' +
                     'DOS BIOS Fonts (*.FNT;*.ROM)|*.FNT;*.ROM|' +
                     'Deluxe Paint Fonts (*.M*;*.PCL)|*.M*;*.PCL|' +
                     'TEGL Fonts (*.RTF;*.FNT)|*.RTF;*.FNT|' +
+                    'APL/Veridian Fonts (*.FNT)|*.FNT|' +
                     'Amiga Fonts (*.*)|*.*|' +
                     'All Files (*.*)|*.*';
   dlgOpen.FilterIndex := FLastOpenFilterIndex;
@@ -1102,9 +1163,11 @@ begin
         LoadDPFontFile(dlgOpen.FileName);
       5: // TEGL
         LoadTEGLFontFile(dlgOpen.FileName);
-      6: // Amiga
+      6: // APL/Veridian
+        LoadAPLFontFile(dlgOpen.FileName);
+      7: // Amiga
         LoadAmigaFontFile(dlgOpen.FileName);
-      7: // All Files - try to auto-detect
+      8: // All Files - try to auto-detect
         AutoLoadFontFile(dlgOpen.FileName);
     end;
   end;
@@ -1126,10 +1189,11 @@ begin
   else if Ext = '.rtf' then
     LoadTEGLFontFile(FN)
   else if Ext = '.fnt' then
-    // For .fnt, try TEGL first (has signature), then fall back to raw FNT
+    // For .fnt, try APL first, then TEGL (has signature), then fall back to raw FNT
     begin
-      if not TryLoadTEGLFont(FN) then
-        LoadFNTFile(FN);
+      if not TryLoadAPLFont(FN) then
+        if not TryLoadTEGLFont(FN) then
+          LoadFNTFile(FN);
     end
   else
     // Unknown - try FON format
@@ -1870,12 +1934,13 @@ var
   CS: TFontCharSet;
   SaveFileName: string;
 begin
-  // Filter indices: 1=FON, 2=FNT, 3=ROM, 4=Deluxe Paint, 5=TEGL, 6=Amiga, 7=All
+  // Filter indices: 1=FON, 2=FNT, 3=ROM, 4=Deluxe Paint, 5=TEGL, 6=APL, 7=Amiga, 8=All
   dlgSave.Filter := 'Windows FON Files (*.FON)|*.FON|' +
                     'DOS BIOS Fonts (*.FNT)|*.FNT|' +
                     'ROM Fonts (*.ROM)|*.ROM|' +
                     'Deluxe Paint Fonts (*.M*)|*.M*|' +
                     'TEGL Fonts (*.RTF)|*.RTF|' +
+                    'APL/Veridian Fonts (*.FNT)|*.FNT|' +
                     'Amiga Fonts (*.FNT)|*.FNT|' +
                     'All Files (*.*)|*.*';
   dlgSave.FileName := edtFontName.Text;
@@ -1895,7 +1960,8 @@ begin
         3: SaveFileName := SaveFileName + '.ROM';
         4: SaveFileName := SaveFileName + '.M8';
         5: SaveFileName := SaveFileName + '.RTF';
-        6: SaveFileName := SaveFileName + '.FNT';
+        6: SaveFileName := SaveFileName + '.FNT';  // APL
+        7: SaveFileName := SaveFileName + '.FNT';  // Amiga
       end;
     end;
     
@@ -1961,7 +2027,16 @@ begin
           end;
         end;
         
-      6: // Amiga
+      6: // APL/Veridian
+        begin
+          try
+            SaveAPLFontFile(SaveFileName);
+          except
+            on E: Exception do ShowMessage('Error saving APL font: ' + E.Message);
+          end;
+        end;
+        
+      7: // Amiga
         begin
           try
             SaveAmigaFontFile(SaveFileName);
@@ -2429,7 +2504,7 @@ end;
 
 procedure TfrmMain.FormKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
 begin
-  if ssCtrl in Shift then
+   if ssCtrl in Shift then
     case Key of
       VK_Z: if ssShift in Shift then mnuRedoClick(nil) else mnuUndoClick(nil);
       VK_Y: mnuRedoClick(nil);
@@ -2446,6 +2521,12 @@ begin
       VK_UP: btnShiftUpClick(nil);
       VK_DOWN: btnShiftDownClick(nil);
     end;
+
+  if Key = VK_F9 then
+  begin
+    mnuScriptManagerClick(nil);
+    Key := 0;
+  end;
 end;
 
 procedure TfrmMain.UpdateStatus;
@@ -2476,6 +2557,11 @@ begin
   FShowDescenderLine := chkShowDescender.Checked;
   FShowXHeightLine := chkShowXHeight.Checked;
   pnlCharEdit.Repaint;
+end;
+
+procedure TfrmMain.mnuScriptClick(Sender: TObject);
+begin
+  mnuScriptManagerClick(nil);
 end;
 
 procedure TfrmMain.spnLineMarkerChange(Sender: TObject);
@@ -2635,6 +2721,300 @@ begin
     'Baseline: %d'+LineEnding+'Ascender: %d ' + LineEnding +
     'Descencer: %d'+LineEnding+'X-Height: %d',
     [BaseVal,AscVal, DescVal, XHVal]);
+end;
+
+{ APL/Veridian Font Format Support }
+
+function TfrmMain.TryLoadAPLFont(const FN: string): Boolean;
+begin
+  Result := TAPLFont.IsAPLFont(FN);
+  if Result then
+    LoadAPLFontFile(FN);
+end;
+
+procedure TfrmMain.LoadAPLFontFile(const FN: string);
+var
+  APLFnt: TAPLFont;
+  I, CW, CH: Integer;
+  Bmp: TBitmap;
+  FirstChar, LastChar: Integer;
+begin
+  APLFnt := TAPLFont.Create;
+  try
+    if not APLFnt.LoadFromFile(FN) then
+    begin
+      ShowMessage('Failed to load APL/Veridian font: ' + FN);
+      Exit;
+    end;
+    
+    // Clear existing data
+    for I := 0 to 255 do
+    begin
+      ClearUndoRedo(I);
+      if FCharBitmaps[I] <> nil then begin FCharBitmaps[I].Free; FCharBitmaps[I] := nil; end;
+    end;
+    
+    edtFontName.Text := APLFnt.FontName;
+    CH := APLFnt.Height;
+    spnHeight.Value := CH;
+    spnAscent.Value := CH - 2;  // Estimate baseline
+    
+    // Load all glyphs and track character range
+    FirstChar := -1;
+    LastChar := -1;
+    
+    for I := 0 to 255 do
+    begin
+      CW := APLFnt.GetCharWidth(I);
+      if CW <= 0 then Continue;
+      
+      // Track first and last characters with data
+      if FirstChar < 0 then FirstChar := I;
+      LastChar := I;
+      
+      Bmp := TBitmap.Create;
+      Bmp.Width := CW;
+      Bmp.Height := CH;
+      Bmp.Canvas.Brush.Color := clWhite;
+      Bmp.Canvas.FillRect(0, 0, CW, CH);
+      
+      if APLFnt.GetGlyphBitmap(I, Bmp) then
+        FCharBitmaps[I] := Bmp
+      else
+        Bmp.Free;
+    end;
+    
+    // Update character range to match actual content
+    if FirstChar < 0 then FirstChar := 32;
+    if LastChar < 0 then LastChar := 127;
+    
+    FCharRangeStart := FirstChar;
+    FCharRangeEnd := LastChar;
+    spnRangeStart.Value := FirstChar;
+    spnRangeEnd.Value := LastChar;
+    
+    for I := 0 to 255 do
+      FCharEnabled[I] := FCharBitmaps[I] <> nil;
+    
+    FCurrentFile := FN;
+    FCurrentChar := FirstChar;  // Start at first available character
+    UpdateCharList;
+    lstCharsClick(nil);
+    UpdateStatus;
+    SetModified(False);
+    StatusBar.Panels[0].Text := Format('Loaded APL font: %s (%dx%d, chars %d-%d)', 
+      [ExtractFileName(FN), APLFnt.MaxWidth, APLFnt.Height, FirstChar, LastChar]);
+  finally
+    APLFnt.Free;
+  end;
+end;
+
+procedure TfrmMain.SaveAPLFontFile(const FN: string);
+var
+  APLFnt: TAPLFont;
+  I: Integer;
+  MaxW, H: Integer;
+  Bmp: TBitmap;
+begin
+  // Find max width and height
+  H := spnHeight.Value;
+  MaxW := 8;
+  for I := 0 to 255 do
+  begin
+    if FCharBitmaps[I] <> nil then
+    begin
+      if FCharBitmaps[I].Width > MaxW then
+        MaxW := FCharBitmaps[I].Width;
+    end;
+  end;
+  
+  APLFnt := TAPLFont.Create;
+  try
+    // Initialize font properties
+    APLFnt.SetProperties(edtFontName.Text, H, MaxW, 1, ffProportional);
+    
+    // Set all character bitmaps
+    for I := 0 to 255 do
+    begin
+      Bmp := FCharBitmaps[I];
+      if Bmp <> nil then
+        APLFnt.SetGlyphFromBitmap(I, Bmp);
+    end;
+    
+    // Save to file
+    if APLFnt.SaveToFile(FN) then
+    begin
+      FCurrentFile := FN;
+      SetModified(False);
+      StatusBar.Panels[0].Text := 'Saved APL font: ' + ExtractFileName(FN);
+    end
+    else
+      ShowMessage('Failed to save APL font: ' + FN);
+  finally
+    APLFnt.Free;
+  end;
+end;
+
+
+{ Script API Callbacks }
+
+function TfrmMain.ScriptGetPixel(CharCode, X, Y: Integer): Boolean;
+begin
+  Result := False;
+  if (CharCode >= 0) and (CharCode <= 255) then
+  begin
+    EnsureCharBitmap(CharCode);
+    if FCharBitmaps[CharCode] <> nil then
+    begin
+      if (X >= 0) and (X < FCharBitmaps[CharCode].Width) and
+         (Y >= 0) and (Y < FCharBitmaps[CharCode].Height) then
+        Result := FCharBitmaps[CharCode].Canvas.Pixels[X, Y] = clBlack;
+    end;
+  end;
+end;
+
+procedure TfrmMain.ScriptSetPixel(CharCode, X, Y: Integer; Value: Boolean);
+begin
+  if (CharCode >= 0) and (CharCode <= 255) then
+  begin
+    EnsureCharBitmap(CharCode);
+    if FCharBitmaps[CharCode] <> nil then
+    begin
+      if (X >= 0) and (X < FCharBitmaps[CharCode].Width) and
+         (Y >= 0) and (Y < FCharBitmaps[CharCode].Height) then
+      begin
+        if Value then
+          FCharBitmaps[CharCode].Canvas.Pixels[X, Y] := clBlack
+        else
+          FCharBitmaps[CharCode].Canvas.Pixels[X, Y] := clWhite;
+      end;
+    end;
+  end;
+end;
+
+function TfrmMain.ScriptGetCharWidth(CharCode: Integer): Integer;
+begin
+  Result := 8;
+  if (CharCode >= 0) and (CharCode <= 255) and (FCharBitmaps[CharCode] <> nil) then
+    Result := FCharBitmaps[CharCode].Width;
+end;
+
+procedure TfrmMain.ScriptSetCharWidth(CharCode, AWidth: Integer);
+begin
+  if (CharCode >= 0) and (CharCode <= 255) then
+  begin
+    EnsureCharBitmap(CharCode);
+    ResizeCharBitmap(CharCode, AWidth, spnHeight.Value);
+  end;
+end;
+
+function TfrmMain.ScriptGetCharBitmap(CharCode: Integer): TBitmap;
+begin
+  Result := nil;
+  if (CharCode >= 0) and (CharCode <= 255) then
+  begin
+    EnsureCharBitmap(CharCode);
+    Result := FCharBitmaps[CharCode];
+  end;
+end;
+
+procedure TfrmMain.ScriptSetCharBitmap(CharCode: Integer; Bmp: TBitmap);
+begin
+  if (CharCode >= 0) and (CharCode <= 255) and (Bmp <> nil) then
+  begin
+    EnsureCharBitmap(CharCode);
+    FCharBitmaps[CharCode].Width := Bmp.Width;
+    FCharBitmaps[CharCode].Height := Bmp.Height;
+    FCharBitmaps[CharCode].Canvas.Draw(0, 0, Bmp);
+  end;
+end;
+
+procedure TfrmMain.ScriptRefresh;
+begin
+  UpdateCharList;
+  UpdatePreview;
+  pnlCharEdit.Invalidate;
+end;
+
+procedure TfrmMain.ScriptSaveUndo(CharCode: Integer);
+begin
+  if (CharCode >= 0) and (CharCode <= 255) then
+  begin
+    FCurrentChar := CharCode;
+    SaveUndoState;
+  end;
+end;
+
+procedure TfrmMain.ScriptSelectChar(CharCode: Integer);
+begin
+  if (CharCode >= 0) and (CharCode <= 255) and FCharEnabled[CharCode] then
+  begin
+    FCurrentChar := CharCode;
+    lstChars.ItemIndex := CharCode - FCharRangeStart;
+    spnCharWidth.Value := FCharBitmaps[CharCode].Width;
+    pnlCharEdit.Invalidate;
+    UpdateStatus;
+  end;
+end;
+
+procedure TfrmMain.ScriptMarkModified;
+begin
+  SetModified(True);
+end;
+
+function TfrmMain.ScriptGetCurrentChar: Integer;
+begin
+  Result := FCurrentChar;
+end;
+
+function TfrmMain.ScriptGetFontHeight: Integer;
+begin
+  Result := spnHeight.Value;
+end;
+
+function TfrmMain.ScriptGetFontName: string;
+begin
+  Result := edtFontName.Text;
+end;
+
+procedure TfrmMain.ScriptSetFontName(const AName: string);
+begin
+  edtFontName.Text := AName;
+end;
+
+function TfrmMain.ScriptGetRangeStart: Integer;
+begin
+  Result := FCharRangeStart;
+end;
+
+function TfrmMain.ScriptGetRangeEnd: Integer;
+begin
+  Result := FCharRangeEnd;
+end;
+
+procedure TfrmMain.ScriptSetRange(StartChar, EndChar: Integer);
+begin
+  spnRangeStart.Value := StartChar;
+  spnRangeEnd.Value := EndChar;
+  ApplyCharRange;
+end;
+
+procedure TfrmMain.ScriptPrint(const Msg: string);
+begin
+  // Output goes to Script Manager's output memo
+  // This is handled by the ScriptManager form
+end;
+
+procedure TfrmMain.mnuScriptManagerClick(Sender: TObject);
+begin
+  if FScriptManagerForm = nil then
+  begin
+    FScriptManagerForm := TfrmScriptManager.Create(Self);
+    FScriptManagerForm.FontAPI := FFontAPI;
+    FScriptManagerForm.ScriptsPath := ExtractFilePath(Application.ExeName) + 'Scripts' + PathDelim;
+  end;
+  FScriptManagerForm.Show;
+  FScriptManagerForm.BringToFront;
 end;
 
 end.

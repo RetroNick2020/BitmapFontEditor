@@ -16,7 +16,10 @@ uses
   WinFont,
   DPFont,
   TEGLFont,
-  AmigaFont;
+  AmigaFont,
+  FontScript,
+  ScriptManager,
+  QBasicInterp;
 
 {$R *.res}
 

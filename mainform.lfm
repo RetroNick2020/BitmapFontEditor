@@ -1,12 +1,12 @@
 object frmMain: TfrmMain
-  Left = 213
-  Height = 703
-  Top = 221
+  Left = 276
+  Height = 752
+  Top = 299
   Width = 1057
   BorderIcons = [biSystemMenu, biMinimize]
   BorderStyle = bsSingle
   Caption = 'FON Font Creator'
-  ClientHeight = 703
+  ClientHeight = 752
   ClientWidth = 1057
   KeyPreview = True
   Menu = MainMenu
@@ -564,7 +564,7 @@ object frmMain: TfrmMain
   object StatusBar: TStatusBar
     Left = 0
     Height = 23
-    Top = 680
+    Top = 729
     Width = 1057
     Panels = <    
       item
@@ -673,6 +673,13 @@ object frmMain: TfrmMain
       object mnuAutoTrim: TMenuItem
         Caption = '&Auto Trim All Characters'
         OnClick = mnuAutoTrimClick
+      end
+      object mnuSep8: TMenuItem
+        Caption = '-'
+      end
+      object mnuScript: TMenuItem
+        Caption = 'Script Manager'
+        OnClick = mnuScriptClick
       end
     end
     object mnuHelp: TMenuItem
